@@ -1,0 +1,11 @@
+device: cuda n_gpu: 1, distributed training: False, 16-bits training: True
+DLL 2020-04-22 01:59:17.147758 - PARAMETER Config : ["Namespace(bert_model='bert-large-uncased', cache_dir=None, config_file='../bert_config.json', disable_progress_bar=False, do_eval=True, do_lower_case=True, do_predict=True, do_train=False, doc_stride=128, eval_script='../data/download/squad/v1.1/evaluate-v1.1.py', fp16=True, gradient_accumulation_steps=1, init_checkpoint='../results/SQuAD/pytorch_model.bin', json_summary='results/dllogger.json', learning_rate=3e-05, local_rank=-1, log_freq=50, loss_scale=0, max_answer_length=30, max_query_length=64, max_seq_length=384, max_steps=-1.0, n_best_size=20, no_cuda=False, null_score_diff_threshold=0.0, num_train_epochs=1.0, output_dir='../results/SQuAD', predict_batch_size=4, predict_file='../data/download/squad/v1.1/dev-v1.1.json', seed=1, skip_cache=False, skip_checkpoint=False, train_batch_size=32, train_file=None, use_env=False, verbose_logging=False, version_2_with_negative=False, vocab_file='../data/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt', warmup_proportion=0.1)"] 
+DLL 2020-04-22 01:59:17.148487 - PARAMETER SEED : 1 
+Traceback (most recent call last):
+  File "run_squad.py", line 1195, in <module>
+    main()
+  File "run_squad.py", line 906, in main
+    tokenizer = BertTokenizer(args.vocab_file, do_lower_case=args.do_lower_case, max_len=512) # for bert large
+  File "/home/navdeep/work/DeepLearningExamples2/PyTorch/LanguageModeling/BERT/tokenization.py", line 103, in __init__
+    "model use `tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`".format(vocab_file))
+ValueError: Can't find a vocabulary file at path '../data/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt'. To load the vocabulary from a Google pretrained model use `tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`

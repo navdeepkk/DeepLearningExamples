@@ -8,9 +8,11 @@ docker run -it --rm \
   --gpus device=$NV_VISIBLE_DEVICES \
   --net=$DOCKER_BRIDGE \
   --shm-size=1g \
+	--privileged=true \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -e LD_LIBRARY_PATH='/workspace/install/lib/' \
   -v $PWD:/workspace/bert \
   -v $PWD/results:/results \
-  bert $CMD
+	berttriton:pytorchnightly $CMD
+#bert $CMD

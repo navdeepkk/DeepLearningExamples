@@ -18,3 +18,4 @@ data/sharded
 data/hdf5
 vocab/
 results/
+pytorch/

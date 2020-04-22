@@ -15,17 +15,17 @@
 
 echo "Container nvidia build = " $NVIDIA_BUILD_ID
 
-init_checkpoint=${1:-"/workspace/bert/checkpoints/bert_uncased.pt"}
-epochs=${2:-"2.0"}
+init_checkpoint=${1:-"/workspace/bert/results/SQuAD/pytorch_model.bin"}
+epochs=${2:-"1.0"}
 batch_size=${3:-"4"}
 learning_rate=${4:-"3e-5"}
 precision=${5:-"fp16"}
-num_gpu=${6:-"8"}
+num_gpu=${6:-"1"}
 seed=${7:-"1"}
 squad_dir=${8:-"$BERT_PREP_WORKING_DIR/download/squad/v1.1"}
 vocab_file=${9:-"$BERT_PREP_WORKING_DIR/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
 OUT_DIR=${10:-"/workspace/bert/results/SQuAD"}
-mode=${11:-"train eval"}
+mode=${11:-"eval"}
 CONFIG_FILE=${12:-"/workspace/bert/bert_config.json"}
 max_steps=${13:-"-1"}
 
@@ -50,7 +50,9 @@ else
   mpi_command=" -m torch.distributed.launch --nproc_per_node=$num_gpu"
 fi
 
-CMD="python  $mpi_command run_squad.py "
+CMD="/opt/nvidia/nsight-systems/2019.5.1/target-linux-x64/nsys profile --trace cuda,cublas,cudnn,nvtx --sample cpu -f true -o res_squad_eval_bs_$batch_size --wait all python $mpi_command run_squad.py "
+#CMD="python  $mpi_command run_squad.py "
+
 CMD+="--init_checkpoint=$init_checkpoint "
 if [ "$mode" = "train" ] ; then
   CMD+="--do_train "

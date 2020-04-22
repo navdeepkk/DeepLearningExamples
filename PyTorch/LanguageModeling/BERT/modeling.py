@@ -30,6 +30,7 @@ from io import open
 
 import torch
 from torch import nn
+from torch.cuda import nvtx
 from torch.nn import CrossEntropyLoss
 from torch.utils import checkpoint
 
@@ -139,6 +140,8 @@ class LinearActivation(Module):
 
     def __init__(self, in_features, out_features, act='gelu', bias=True):
         super(LinearActivation, self).__init__()
+        #adding variable to carry name of activation till the end
+        self.finact = act
         self.in_features = in_features
         self.out_features = out_features
         self.act_fn = nn.Identity()                                                         #
@@ -148,11 +151,13 @@ class LinearActivation(Module):
             if bias and not 'bias' in act:                                                  # compatibility
                 act = 'bias_' + act                                                         #
                 self.biased_act_fn = ACT2FN[act]                                            #
-
+                self.finact = act
             else:
                 self.act_fn = ACT2FN[act]
+                self.finact = act
         else:
             self.act_fn = act
+            self.finact = act
         self.weight = Parameter(torch.Tensor(out_features, in_features))
         if bias:
             self.bias = Parameter(torch.Tensor(out_features))
@@ -169,9 +174,17 @@ class LinearActivation(Module):
 
     def forward(self, input):
         if not self.bias is None:
-            return self.biased_act_fn(self.bias, F.linear(input, self.weight, None))
+            nvtx.range_push("using activation with no bias".join(self.finact))
+            #return self.biased_act_fn(self.bias, F.linear(input, self.weight, None))
+            toreturn = self.biased_act_fn(self.bias, F.linear(input, self.weight, None))
+            nvtx.range_pop()
+            return toreturn
         else:
-            return self.act_fn(F.linear(input, self.weight, self.bias))
+            nvtx.range_push("using activation with bias".join(self.finact))
+            #return self.act_fn(F.linear(input, self.weight, self.bias))
+            toreturn = self.act_fn(F.linear(input, self.weight, self.bias))
+            nvtx.range_pop()
+            return toreturn
 
     def extra_repr(self):
         return 'in_features={}, out_features={}, bias={}'.format(
@@ -313,12 +326,16 @@ class BertLayerNorm(Module):
 
     def forward(self, x):
         if self.apex_enabled and not torch.jit.is_scripting():
+            nvtx.range_push("using apex optimized fused_layer_norm")
             x = self.fused_layer_norm(x)
+            nvtx.range_pop()
         else:
+            nvtx.range_push("using manual code fused_layer_Norm")
             u = x.mean(-1, keepdim=True)
             s = (x - u).pow(2).mean(-1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
             x = self.weight * x + self.bias
+            nvtx.range_pop()
         return x
 
 class BertEmbeddings(nn.Module):
@@ -340,13 +357,27 @@ class BertEmbeddings(nn.Module):
         position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
         position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
 
+        nvtx.range_push("embeddings_word_embeddings".join( [str(i) for i in list(input_ids.size())]))
         words_embeddings = self.word_embeddings(input_ids)
-        position_embeddings = self.position_embeddings(position_ids)
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        nvtx.range_pop()
 
+        nvtx.range_push("embeddings_position_embeddings".join( [str(i) for i in list(input_ids.size())]))
+        position_embeddings = self.position_embeddings(position_ids)
+        nvtx.range_pop()
+        
+        nvtx.range_push("embeddings_token_type_embeddings".join( [str(i) for i in list(input_ids.size())]))
+        token_type_embeddings = self.token_type_embeddings(token_type_ids)
+        nvtx.range_pop()
+        
+        nvtx.range_push("embeddings_sum")
         embeddings = words_embeddings + position_embeddings + token_type_embeddings
+        nvtx.range_pop()
+        nvtx.range_push("embeddings_layernorm")
         embeddings = self.LayerNorm(embeddings)
+        nvtx.range_pop()
+        nvtx.range_push("embeddings_dropout")
         embeddings = self.dropout(embeddings)
+        nvtx.range_pop()
         return embeddings
 
 
@@ -378,31 +409,66 @@ class BertSelfAttention(nn.Module):
         return x.permute(0, 2, 3, 1)
 
     def forward(self, hidden_states, attention_mask):
+        nvtx.range_push("self_attention_query_layer".join( [str(i) for i in list(hidden_states.size())]))
         mixed_query_layer = self.query(hidden_states)
+        nvtx.range_pop()        
+        nvtx.range_push("self_attention_key_layer".join( [str(i) for i in list(hidden_states.size())]))
         mixed_key_layer = self.key(hidden_states)
+        nvtx.range_pop()
+        nvtx.range_push("self_attention_value_layer".join( [str(i) for i in list(hidden_states.size())]))
         mixed_value_layer = self.value(hidden_states)
-
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_attention_query_transpose".join([str(i) for i in list(mixed_query_layer.size())]))
         query_layer = self.transpose_for_scores(mixed_query_layer)
-        key_layer = self.transpose_key_for_scores(mixed_key_layer)
+        nvtx.mark("size_after_query_transpose".join([str(i) for i in list(query_layer.size())]))
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_attention_key_transpose".join([str(i) for i in list(mixed_key_layer.size())]))
+        key_layer = self.transpose_key_for_scores(mixed_key_layer) 
+        nvtx.mark("size_after_key_transpose".join([str(i) for i in list(key_layer.size())]))
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_attention_value_transpose".join([str(i) for i in list(mixed_value_layer.size())]))
         value_layer = self.transpose_for_scores(mixed_value_layer)
+        nvtx.mark("size_after_value_transpose".join([str(i) for i in list(value_layer.size())]))
+        nvtx.range_pop()
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
+        nvtx.range_push("self_attention_matmul(q,k')") 
         attention_scores = torch.matmul(query_layer, key_layer)
+        nvtx.mark("after_matmul(q,k')".join([str(i) for i in list(attention_scores.size())]))
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_attention_matmul(q,k')/sqrt(ahs)")
         attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        nvtx.range_pop()
+
+        
         # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+        nvtx.range_push("self_attention_attention_scores + attention_mask")
         attention_scores = attention_scores + attention_mask
+        nvtx.range_pop()
 
         # Normalize the attention scores to probabilities.
+        nvtx.range_push("self_attention_softmax")
         attention_probs = F.softmax(attention_scores, dim=-1)
-
+        nvtx.range_pop()
+    
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
+        nvtx.range_push("self_attention_dropout")
         attention_probs = self.dropout(attention_probs)
-
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_attention_final_mul")
         context_layer = torch.matmul(attention_probs, value_layer)
+        nvtx.mark("after_final_mul_in_self_attention".join([ str(i) for i in list(context_layer.size())]))
+        nvtx.range_pop()
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = torch.reshape(context_layer, new_context_layer_shape)
+        nvtx.mark("self_attention_context_layer_fin_size".join([str(i) for i in list(context_layer.size())]))
         return context_layer
 
 
@@ -414,9 +480,21 @@ class BertSelfOutput(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states, input_tensor):
+        nvtx.range_push("self_output_dense".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.dense(hidden_states)
+        nvtx.mark("self_out_size_after_dense".join([str(i) for i in list(hidden_states.size())]))
+        nvtx.range_pop()
+        
+        nvtx.range_push("self_output_dropout".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.dropout(hidden_states)
+        nvtx.mark("self_out_size_after_dropout".join([str(i) for i in list(hidden_states.size())]))
+        nvtx.range_pop()
+
+        nvtx.range_push("self_output_LayerNorm".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        nvtx.mark("self_out_size_after_LayerNorm".join([str(i) for i in list(hidden_states.size())]))
+        nvtx.range_pop()
+
         return hidden_states
 
 
@@ -438,7 +516,10 @@ class BertIntermediate(nn.Module):
         self.dense_act = LinearActivation(config.hidden_size, config.intermediate_size, act=config.hidden_act)
 
     def forward(self, hidden_states):
+        nvtx.range_push("intermediate_dense_act".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.dense_act(hidden_states)
+        nvtx.mark("intermediate_output_size".join([str(i) for i in list(hidden_states.size())]))
+        nvtx.range_pop()
         return hidden_states
 
 
@@ -450,9 +531,15 @@ class BertOutput(nn.Module):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
     def forward(self, hidden_states, input_tensor):
+        nvtx.range_push("output_dense".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.dense(hidden_states)
+        nvtx.range_pop()
+        nvtx.range_push("output_dropout".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.dropout(hidden_states)
+        nvtx.range_pop()
+        nvtx.range_push("output_layernorm".join([str(i) for i in list(hidden_states.size())]))
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        nvtx.range_pop()
         return hidden_states
 
 
@@ -521,7 +608,9 @@ class BertPooler(nn.Module):
         # We "pool" the model by simply taking the hidden state corresponding
         # to the first token.
         first_token_tensor = hidden_states[:, 0]
+        nvtx.range_push("pooler_dense_act".join( [str(i) for i in list(first_token_tensor.size())]))
         pooled_output = self.dense_act(first_token_tensor)
+        nvtx.range_pop()
         return pooled_output
 
 
@@ -817,11 +906,13 @@ class BertModel(BertPreTrainedModel):
         # effectively the same as removing these entirely.
         extended_attention_mask = extended_attention_mask.to(dtype=self.embeddings.word_embeddings.weight.dtype) # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
-
+        
+        nvtx.range_push("iteration_start")
         embedding_output = self.embeddings(input_ids, token_type_ids)
         encoded_layers = self.encoder(embedding_output, extended_attention_mask)
         sequence_output = encoded_layers[-1]
         pooled_output = self.pooler(sequence_output)
+        nvtx.range_pop()
         if not self.output_all_encoded_layers:
             encoded_layers = encoded_layers[-1:]
         return encoded_layers, pooled_output
@@ -1271,8 +1362,11 @@ class BertForQuestionAnswering(BertPreTrainedModel):
     def forward(self, input_ids, token_type_ids, attention_mask):
         encoded_layers, _ = self.bert(input_ids, token_type_ids, attention_mask)
         sequence_output = encoded_layers[-1]
+        nvtx.range_push("qa_outputs".join([str(i) for i in list(sequence_output.size())]))
         logits = self.qa_outputs(sequence_output)
+        nvtx.range_pop()
         start_logits, end_logits = logits.split(1, dim=-1)
         start_logits = start_logits.squeeze(-1)
         end_logits = end_logits.squeeze(-1)
+        nvtx.mark("start_logits_size".join([str(i) for i in list(start_logits.size())]))
         return start_logits, end_logits

@@ -1099,7 +1099,7 @@ def main():
 
         if not args.do_train and args.fp16:
             model.half()
-
+        #print(model)
         eval_examples = read_squad_examples(
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative)
         eval_features = convert_examples_to_features(
