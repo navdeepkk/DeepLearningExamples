@@ -38,9 +38,17 @@ wheels/
 *.egg
 MANIFEST
 
-# apex and pytorch
-pytorch/
-apex/
+########################################### apex and pytorch
+pytorch/*
+apex/*
+bert_graph/*
+python_tests/*
+wikitext-2/*
+PyProf/*
+cublas_tests/
+prof_results/*
+python_tests/*
+############################################
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

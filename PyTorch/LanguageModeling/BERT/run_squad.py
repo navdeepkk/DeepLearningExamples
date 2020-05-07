@@ -33,6 +33,10 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
+from torch.cuda import nvtx
+import torch.cuda.profiler as profiler
+from apex import pyprof
+pyprof.nvtx.init()
 
 from apex import amp
 from schedulers import LinearWarmUpScheduler
@@ -41,6 +45,7 @@ from modeling import BertForQuestionAnswering, BertConfig, WEIGHTS_NAME, CONFIG_
 from optimization import BertAdam, warmup_linear
 from tokenization import (BasicTokenizer, BertTokenizer, whitespace_tokenize)
 from utils import is_main_process, format_step
+from torchviz import make_dot, make_dot_from_trace
 import dllogger, time
 
 torch._C._jit_set_profiling_mode(False)
@@ -202,7 +207,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     end_position=end_position,
                     is_impossible=is_impossible)
                 examples.append(example)
-    return examples
+    return examples[:50]
 
 
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
@@ -930,6 +935,13 @@ def main():
     dllogger.log(step="PARAMETER", data={"loaded_checkpoint": True})
     model.to(device)
     num_weights = sum([p.numel() for p in model.parameters() if p.requires_grad])
+    #My comment--print the name of the parameters which have reequre grad.
+    '''    
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            print(name)
+    '''
+    #My Comment--added code ends here.
     dllogger.log(step="PARAMETER", data={"model_weights_num":num_weights})
 
     # Prepare optimizer
@@ -994,6 +1006,7 @@ def main():
 
         train_features = None
         try:
+            raise Exception('Not Using cached Fatures.')
             with open(cached_train_features_file, "rb") as reader:
                 train_features = pickle.load(reader)
         except:
@@ -1036,13 +1049,14 @@ def main():
             train_iter = tqdm(train_dataloader, desc="Iteration", disable=args.disable_progress_bar) if is_main_process() else train_dataloader
             for step, batch in enumerate(train_iter):
                 # Terminate early for benchmarking
-                
+                #with torch.autograd.profiler.emit_nvtx():                          #My comment--Added my code.
                 if args.max_steps > 0 and global_step > args.max_steps:
                     break
 
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch)  # multi-gpu does scattering it-self
                 input_ids, input_mask, segment_ids, start_positions, end_positions = batch
+                nvtx.range_push("squad_iteration_start")  
                 start_logits, end_logits = model(input_ids, segment_ids, input_mask)
                 # If we are on multi-GPU, split add a dimension
                 if len(start_positions.size()) > 1:
@@ -1051,39 +1065,80 @@ def main():
                     end_positions = end_positions.squeeze(-1)
                 # sometimes the start/end positions are outside our model inputs, we ignore these terms
                 ignored_index = start_logits.size(1)
-                start_positions.clamp_(0, ignored_index)
-                end_positions.clamp_(0, ignored_index)
+                start_positions.clamp_(0, ignored_index)            #My comment--clamping will move all values between [0, 384]
+                end_positions.clamp_(0, ignored_index)              #My comment--clamped becuase cross entropy loss expects value between [0,384)
+
+                if step == 5:
+                    profiler.start()
 
                 loss_fct = torch.nn.CrossEntropyLoss(ignore_index=ignored_index)
+                nvtx.range_push("calculating_start_loss") 
                 start_loss = loss_fct(start_logits, start_positions)
+                nvtx.range_pop()
+                nvtx.range_push("calculating_end_loss")
                 end_loss = loss_fct(end_logits, end_positions)
+                nvtx.range_pop()
+                nvtx.range_push("(start_loss + end_loss)/2")
                 loss = (start_loss + end_loss) / 2
+                '''print the graph for backward pass.
+                if step == 1:
+                    dot = make_dot(loss, params=dict(model.named_parameters()))
+                    dot.fomrat = 'png'
+                    dot.render("graph")
+                '''
+                nvtx.range_pop()
                 if n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu.
                 if args.gradient_accumulation_steps > 1:
                     loss = loss / args.gradient_accumulation_steps
+                #with torch.autograd.profiler.emit_nvtx(True, True):
+                #with torch.autograd.profiler.emit_nvtx():
                 if args.fp16:
                     with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        nvtx.range_push("scaled_loss_backward")
                         scaled_loss.backward()
+                        nvtx.range_pop()
                 else:
+                    nvtx.range_push("loss_backward")
                     loss.backward()
-                
-                # gradient clipping  
-                gradClipper.step(amp.master_params(optimizer))         
+                    nvtx.range_pop()
+             
+                # gradient clipping 
+                nvtx.range_push("gradient_clipping") 
+                #with torch.autograd.profiler.emit_nvtx(True, True):
+                #with torch.autograd.profiler.emit_nvtx():
+                gradClipper.step(amp.master_params(optimizer))      
+                nvtx.range_pop()
  
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16 :
                         # modify learning rate with special warm up for BERT which FusedAdam doesn't do
+                        nvtx.range_push("scheduler_step")
+                        #with torch.autograd.profiler.emit_nvtx(True, True):
+                        #with torch.autograd.profiler.emit_nvtx():
                         scheduler.step()
+                        nvtx.range_pop()
+                    nvtx.range_push("optimizer_step")
+                    #with torch.autograd.profiler.emit_nvtx(True, True):
+                    #with torch.autograd.profiler.emit_nvtx():
                     optimizer.step()
+                    nvtx.range_pop()
+                    nvtx.range_push("optimizer_zero_grad")
+                    #with torch.autograd.profiler.emit_nvtx(True, True):
+                    #with torch.autograd.profiler.emit_nvtx():
                     optimizer.zero_grad()
+                    nvtx.range_pop()
                     global_step += 1
 
                 final_loss = loss.item()
+                nvtx.range_pop()
+                if step == 5:
+                    profiler.stop()
+                
                 if step % args.log_freq == 0:
                     dllogger.log(step=(epoch, global_step,), data={"step_loss": final_loss,
                                                                    "learning_rate": optimizer.param_groups[0]['lr']})
-
+                #My comment--indented the block till here for profiler.
         time_to_train = time.time() - train_start
 
     if args.do_train and is_main_process() and not args.skip_checkpoint:
@@ -1165,11 +1220,11 @@ def main():
         if args.do_eval and is_main_process():
             import sys
             import subprocess
-            eval_out = subprocess.check_output([sys.executable, args.eval_script,
-                                              args.predict_file, args.output_dir + "/predictions.json"])
-            scores = str(eval_out).strip()
-            exact_match = float(scores.split(":")[1].split(",")[0])
-            f1 = float(scores.split(":")[2].split("}")[0])
+            #eval_out = subprocess.check_output([sys.executable, args.eval_script,
+            #                                  args.predict_file, args.output_dir + "/predictions.json"])
+            #scores = str(eval_out).strip()
+            #exact_match = float(scores.split(":")[1].split(",")[0])
+            #f1 = float(scores.split(":")[2].split("}")[0])
 
     if args.do_train:
         gpu_count = n_gpu

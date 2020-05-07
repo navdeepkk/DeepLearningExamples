@@ -15,18 +15,18 @@
 
 #echo "Container nvidia build = " $NVIDIA_BUILD_ID
 
-init_checkpoint=${1:-"../results/SQuAD/pytorch_model.bin"}
+init_checkpoint=${1:-"checkpoints/DLE_BERT_FP16_PyT_LAMB_92_hard_scaling_node.pt"}
 epochs=${2:-"1.0"}
 batch_size=${3:-"4"}
 learning_rate=${4:-"3e-5"}
 precision=${5:-"fp16"}
 num_gpu=${6:-"1"}
 seed=${7:-"1"}
-squad_dir=${8:-"../data/download/squad/v1.1"}
-vocab_file=${9:-"../data/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
-OUT_DIR=${10:-"../results/SQuAD"}
-mode=${11:-"eval"}
-CONFIG_FILE=${12:-"../bert_config.json"}
+squad_dir=${8:-"data/download/squad/v1.1"}
+vocab_file=${9:-"data/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
+OUT_DIR=${10:-"results/SQuAD"}
+mode=${11:-"train"}
+CONFIG_FILE=${12:-"bert_config.json"}
 max_steps=${13:-"-1"}
 
 echo "out dir is $OUT_DIR"
@@ -50,8 +50,18 @@ else
   mpi_command=" -m torch.distributed.launch --nproc_per_node=$num_gpu"
 fi
 
-#CMD="/opt/nvidia/nsight-systems/2019.5.1/target-linux-x64/nsys profile --trace cuda,cublas,cudnn,nvtx --sample cpu -f true -o res_squad_eval_bs_$batch_size --wait all python $mpi_command run_squad.py "
-CMD="python  $mpi_command run_squad.py "
+metrics="sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active,sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_elapsed,sm__pipe_tensor_op_hmma_cycles_active.avg.pct_of_peak_sustained_active,smsp__sass_thread_inst_executed_ops_dadd_dmul_dfma_pred_on.avg.pct_of_peak_sustained_elapsed,smsp__sass_thread_inst_executed_ops_hadd_hmul_hfma_pred_on.avg.pct_of_peak_sustained_elapsed,smsp__sass_thread_inst_executed_ops_fadd_fmul_ffma_pred_on.avg.pct_of_peak_sustained_elapsed,sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active,smsp__sass_thread_inst_executed_ops_dadd_dmul_dfma_pred_on.avg.pct_of_peak_sustained_active,smsp__sass_thread_inst_executed_ops_hadd_hmul_hfma_pred_on.avg.pct_of_peak_sustained_active,smsp__sass_thread_inst_executed_ops_fadd_fmul_ffma_pred_on.avg.pct_of_peak_sustained_active,smsp__sass_thread_inst_executed_op_ffma_pred_on.sum,smsp__sass_thread_inst_executed_op_fadd_pred_on.sum,smsp__sass_thread_inst_executed_op_fmul_pred_on.sum,smsp__sass_thread_inst_executed_op_dmul_pred_on.sum,smsp__sass_thread_inst_executed_op_dadd_pred_on.sum,smsp__sass_thread_inst_executed_op_dfma_pred_on.sum,smsp__sass_thread_inst_executed_op_hmul_pred_on.sum,smsp__sass_thread_inst_executed_op_hadd_pred_on.sum,smsp__sass_thread_inst_executed_op_hfma_pred_on.sum"
+
+
+
+CMD="nsys profile --trace cuda,cublas,nvtx --sample cpu -f true -o res_squad_eval_bs_refined_without_in_nvtx_in_backprop_$batch_size --wait all python $mpi_command run_squad.py "
+#CMD="nsys profile --trace cuda,cublas,nvtx --sample cpu -f true --gpuctxsw true -o res_squad_eval_bs_gpuctxsw_$batch_size --wait all python $mpi_command run_squad.py "
+#CMD="nsys profile --trace cuda,cublas,nvtx --sample cpu --stats true --export sqlite --wait all python $mpi_command run_squad.py "
+#CMD="nsys profile --trace cuda,cublas,nvtx --sample cpu --cudabacktrace true -f true -o res_squad_train_bs$batch_size --wait all python $mpi_command run_squad.py "
+#CMD="nsys profile --capture-range cudaProfilerApi --stop-on-range-end true --export=sqlite -f true -o net python3 $mpi_command run_squad.py "
+#CMD="nvprof --profile-from-start off -f -o net.sql python3 $mpi_command run_squad.py "
+#CMD=" sudo /usr/local/cuda-10.2/bin/nv-nsight-cu-cli --metrics sm__pipe_tensor_cycles_active.avg.pct_of_peak_sustained_active -f -o res_squad_compute_10^3_ITR$batch_size --nvtx /home/navdeep/anaconda3/bin/python3 $mpi_command run_squad.py  "
+#CMD="python  $mpi_command run_squad.py "
 
 CMD+="--init_checkpoint=$init_checkpoint "
 if [ "$mode" = "train" ] ; then

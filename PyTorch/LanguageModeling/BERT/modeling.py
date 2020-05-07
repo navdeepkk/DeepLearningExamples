@@ -174,13 +174,16 @@ class LinearActivation(Module):
 
     def forward(self, input):
         if not self.bias is None:
-            nvtx.range_push("using activation with no bias".join(self.finact))
+            nvtx.range_push("using activation with bias"+self.finact)
+            #print(self.finact)
+            #print(self.weight.size())
             #return self.biased_act_fn(self.bias, F.linear(input, self.weight, None))
             toreturn = self.biased_act_fn(self.bias, F.linear(input, self.weight, None))
             nvtx.range_pop()
             return toreturn
         else:
-            nvtx.range_push("using activation with bias".join(self.finact))
+            nvtx.range_push("using activation with no bias"+self.finact)
+            #print(self.finact)
             #return self.act_fn(F.linear(input, self.weight, self.bias))
             toreturn = self.act_fn(F.linear(input, self.weight, self.bias))
             nvtx.range_pop()
@@ -1363,10 +1366,10 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         encoded_layers, _ = self.bert(input_ids, token_type_ids, attention_mask)
         sequence_output = encoded_layers[-1]
         nvtx.range_push("qa_outputs".join([str(i) for i in list(sequence_output.size())]))
-        logits = self.qa_outputs(sequence_output)
+        logits = self.qa_outputs(sequence_output)               #logits will be of size[BS,384,2]
         nvtx.range_pop()
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
+        start_logits, end_logits = logits.split(1, dim=-1)      #dims [BS,384,1]
+        start_logits = start_logits.squeeze(-1)                 #dims [BS,384]
         end_logits = end_logits.squeeze(-1)
         nvtx.mark("start_logits_size".join([str(i) for i in list(start_logits.size())]))
         return start_logits, end_logits

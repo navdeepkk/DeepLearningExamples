@@ -15,9 +15,9 @@
 
 echo "Container nvidia build = " $NVIDIA_BUILD_ID
 
-init_checkpoint=${1:-"/workspace/bert/results/SQuAD/pytorch_model.bin"}
+init_checkpoint=${1:-"/workspace/bert/results/SQuAD/pytorch_model_copy.bin"}
 epochs=${2:-"1.0"}
-batch_size=${3:-"4"}
+batch_size=${3:-"512"}
 learning_rate=${4:-"3e-5"}
 precision=${5:-"fp16"}
 num_gpu=${6:-"1"}
